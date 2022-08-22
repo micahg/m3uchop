@@ -3,6 +3,7 @@ import re
 import sys
 import logging
 import json
+from argparse import ArgumentParser
 from urllib.parse import urlparse
 
 import requests
@@ -15,7 +16,7 @@ M3U_HEADER = b'#EXTM3U'
 M3U_INFO = b'#EXTINF:'
 M3U_GROUP = b'#EXTGRP:'
 M3U_INFO_GROUP_RE = re.compile(b'.*group-title=\"(.*?)\"')
-M3U_INFO_NAME_RE = re.compile(b'.*tvg-name=\"(.*?)\"')
+M3U_INFO_RE = re.compile(b'.*tvg-id=\"(.*?)\".*tvg-name=\"(.*?)\"')
 
 
 def load_config():
@@ -79,12 +80,14 @@ def filter_playlist(config, input, output):
     """
     groups = [ bytes(group.lower(), 'ascii') for group in config['groups'] ]
     names = [ bytes(name.lower(), 'ascii') for name in config['channels'] ]
+    ids = [ bytes(id.lower(), 'ascii') for id in config['ids'] ]
 
     url = None
     group = None
     info = None
-    group_title = None
+    group_name = None
     keep = False
+    all_groups = []
     for line in input:
 
         # let the header through
@@ -96,19 +99,22 @@ def filter_playlist(config, input, output):
 
             # see if the group matches
             match = M3U_INFO_GROUP_RE.match(line)
-            if match is not None and match.group(1).lower() in groups:
+            if match is not None:
+                group_name = match.group(1).lower()
+                if group_name in groups:
                     keep = True
-                    continue
 
             # see if the name tag matches
-            match = M3U_INFO_NAME_RE.match(line)
+            match = M3U_INFO_RE.match(line)
             if match is not None:
-                info_name = match.group(1).lower()
+                tvg = match.group(1).lower()
+                info_name = match.group(2).lower()
                 for name in names:
                     if name in info_name:
                         keep = True
-                        continue
-            
+                if tvg in ids:
+                    keep = True
+
             # see if the other name matches
             info_name = line.rsplit(b',')[1].lower()
             for name in names:
@@ -117,7 +123,8 @@ def filter_playlist(config, input, output):
                     continue
         elif line.startswith(M3U_GROUP):
             group = line
-            if line.split(b':')[1].strip().lower() in groups:
+            group_name = line.split(b':')[1].strip().lower()
+            if group_name in groups:
                 keep = True
         else:
             url = line
@@ -128,15 +135,26 @@ def filter_playlist(config, input, output):
                 info = None
                 group = None
                 url = None
+                group_name = None
                 keep = False
 
+        if keep and group_name and not group_name in all_groups:
+            all_groups.append(group_name)
+
+    logging.info(f'Groups matched (by group or id): {all_groups}')
 
 def __main__():
     """
     Run the program
     """
-    log_level = logging.DEBUG# if args.debug else logging.INFO
-    logging.basicConfig(format=LOG_FORMAT, level=log_level)
+    parser = ArgumentParser()
+    parser.add_argument('-d', '--debug', action='store_true', dest='debug',
+                        help='debug logging')
+    parser.add_argument('-l', '--logfile', action='store', dest='logfile',
+                        help='log file location')
+    args = parser.parse_args()
+    log_level = logging.DEBUG if args.debug else logging.INFO
+    logging.basicConfig(format=LOG_FORMAT, level=log_level, filename=args.logfile if args.logfile else None)
     cfg = load_config()
 
     if not 'output' in cfg:
