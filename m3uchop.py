@@ -152,18 +152,21 @@ def __main__():
                         help='debug logging')
     parser.add_argument('-l', '--logfile', action='store', dest='logfile',
                         help='log file location')
+    parser.add_argument('-o', '--output', action='store', dest='output',
+                        help='output file location')
     args = parser.parse_args()
     log_level = logging.DEBUG if args.debug else logging.INFO
     logging.basicConfig(format=LOG_FORMAT, level=log_level, filename=args.logfile if args.logfile else None)
     cfg = load_config()
 
-    if not 'output' in cfg:
+    output_filename = args.output if args.output else cfg['output']
+    if not output_filename:
         logging.error(f'No output in {CONFIG_FILE}')
         sys.exit(1)
 
     pl_filename = get_playlist(cfg)
 
-    with open(cfg['output'], 'wb') as out_file:
+    with open(output_filename, 'wb') as out_file:
         with open(pl_filename, 'rb') as in_file:
             filter_playlist(cfg, in_file, out_file)
 
