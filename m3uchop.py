@@ -5,6 +5,8 @@ import logging
 import json
 from urllib.parse import urlparse
 
+import requests
+
 URL_ENV_VAR = 'M3U_URL'
 CONFIG_FILE = 'config.json'
 LOG_FORMAT = '%(asctime)-15s [%(funcName)s] %(message)s'
@@ -57,9 +59,17 @@ def get_playlist(config):
         return pl_path
 
     logging.info(f'Downloading playlist from "{playlist}"')
-    # TODO download to temp and return filename
+    resp = requests.get(playlist)
+    logging.info('Download complete')
+    if resp.status_code != 200:
+        logging.error(f'Invalid response while downloading URL ({resp.status_code}: {resp.content}')
+        sys.exit(1)
 
-    return None
+    output = '/tmp/playlist.m3u'
+    with open(output, 'wb') as file:
+        file.write(resp.content)
+
+    return output
 
 
 
