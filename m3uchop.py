@@ -73,20 +73,46 @@ def get_playlist(config):
     return output
 
 
+def byte_cast(item):
+    if type(item) == dict:
+        result = {k : bytes(v, 'ascii') for k,v in item.items()}
+    else:
+        result = bytes(item.lower(), 'ascii')
+    return result
+
+
+def match_item(criteria, item, exact = False):
+    """
+    Determine if an item matches and if it should be remapped
+    @return boolean tuple representing match and remap
+    """
+    if len(item) == 0:
+        return False, None
+
+    for criterion in criteria:
+        if type(criterion) == dict and criterion['name'] == item:
+            return True, criterion['group_remap'] if 'group_remap' in criterion else None
+        if type(criterion) == dict and criterion['name'] in item and not exact:
+            return True, criterion['group_remap'] if 'group_remap' in criterion else None
+        elif item in criterion:
+            return True, None
+
+    return False, None
 
 def filter_playlist(config, input, output):
     """
     Filter the entries in the playlist.
     """
     groups = [ bytes(group.lower(), 'ascii') for group in config['groups'] ]
-    names = [ bytes(name.lower(), 'ascii') for name in config['channels'] ]
-    ids = [ bytes(id.lower(), 'ascii') for id in config['ids'] ]
+    names = [ byte_cast(name) for name in config['names'] ]
+    ids = [ byte_cast(id) for id in config['ids'] ]
 
     url = None
     group = None
     info = None
     group_name = None
     keep = False
+    remap = None
     all_groups = []
     for line in input:
 
@@ -109,18 +135,26 @@ def filter_playlist(config, input, output):
             if match is not None:
                 tvg = match.group(1).lower()
                 info_name = match.group(2).lower()
-                for name in names:
-                    if name in info_name:
-                        keep = True
-                if tvg in ids:
-                    keep = True
+
+                # check for keep/remap on name
+                keep_flag, remap_flag = match_item(names, info_name)
+                keep = True if keep_flag else keep
+                if keep:
+                    pass
+                remap = remap_flag if remap_flag is not None else remap
+
+                # check for exact match/remap on tvg-id
+                keep_flag, remap_flag = match_item(ids, tvg, True)
+                keep = True if keep_flag else keep
+                if keep:
+                    pass
+                remap = remap_flag if remap_flag is not None else remap
 
             # see if the other name matches
             info_name = line.rsplit(b',')[1].lower()
-            for name in names:
-                if name in info_name:
-                    keep = True
-                    continue
+            keep_flag, remap_flag = match_item(names, info_name)
+            keep = True if keep_flag else keep
+            remap = remap_flag if remap_flag is not None else remap
         elif line.startswith(M3U_GROUP):
             group = line
             group_name = line.split(b':')[1].strip().lower()
@@ -129,6 +163,11 @@ def filter_playlist(config, input, output):
         else:
             url = line
             if keep:
+                if remap:
+                    base_re = rb'(.*group-title=\")(.*?)(\".*)'
+                    rep_re = rb"\1" + remap + rb"\3"
+                    info = re.sub(base_re, rep_re, info)
+                    group = b':'.join([group.split(b':')[0],remap]) + b'\n'
                 output.write(info)
                 output.write(group)
                 output.write(url)
@@ -137,11 +176,13 @@ def filter_playlist(config, input, output):
                 url = None
                 group_name = None
                 keep = False
+                remap = False
 
         if keep and group_name and not group_name in all_groups:
             all_groups.append(group_name)
 
     logging.info(f'Groups matched (by group or id): {all_groups}')
+
 
 def __main__():
     """
@@ -159,7 +200,7 @@ def __main__():
     logging.basicConfig(format=LOG_FORMAT, level=log_level, filename=args.logfile if args.logfile else None)
     cfg = load_config()
 
-    output_filename = args.output if args.output else cfg['output']
+    output_filename = args.output if args.output else cfg['output'] if 'output' in cfg else None
     if not output_filename:
         logging.error(f'No output in {CONFIG_FILE}')
         sys.exit(1)
