@@ -27,10 +27,10 @@ def load_config():
         with open(CONFIG_FILE, 'rb') as file:
             return json.load(file)
     except FileNotFoundError as err:
-        logging.error(f'Unable to open config file {CONFIG_FILE}: {err}')
+        logging.error('Unable to open config file %s: %s', CONFIG_FILE, err)
         sys.exit(1)
-    except json.JSONDecodeError as err:
-        logging.error(f'Invalid JSON in config file {CONFIG_FILE}')
+    except json.JSONDecodeError:
+        logging.error('Invalid JSON in config file %s', CONFIG_FILE)
         sys.exit(1)
 
 
@@ -45,25 +45,26 @@ def get_playlist(config):
         playlist = config['playlist']
 
     if not playlist:
-        logging.error(f'No playlist in {URL_ENV_VAR} or config {CONFIG_FILE}')
+        logging.error('No playlist in %s or config %s', URL_ENV_VAR, CONFIG_FILE)
         sys.exit(1)
-    
+
     try:
         pl_url = urlparse(playlist)
-    except ValueError as err:
-        logging.error(f'Unable to parse playlist URL "{playlist}"')
+    except ValueError:
+        logging.error('Unable to parse playlist URL "%s"', playlist)
         sys.exit(1)
 
     pl_path = pl_url.path
     if not (pl_url.scheme and pl_url.hostname):
-        logging.info(f'Using local file "{pl_url.path}"')
+        logging.info('Using local file "%s"', pl_url.path)
         return pl_path
 
-    logging.info(f'Downloading playlist from "{playlist}"')
-    resp = requests.get(playlist)
+    logging.info('Downloading playlist from "%s"', playlist)
+    resp = requests.get(playlist, timeout=10, allow_redirects=True)
     logging.info('Download complete')
     if resp.status_code != 200:
-        logging.error(f'Invalid response while downloading URL ({resp.status_code}: {resp.content}')
+        logging.error('Invalid response while downloading URL (%s: %s)',
+                      resp.status_code, resp.content)
         sys.exit(1)
 
     output = '/tmp/playlist.m3u'
@@ -99,7 +100,7 @@ def match_item(criteria, item, exact = False):
 
     return False, None
 
-def filter_playlist(config, input, output):
+def filter_playlist(config, input_lines, output):
     """
     Filter the entries in the playlist.
     """
@@ -114,7 +115,7 @@ def filter_playlist(config, input, output):
     keep = False
     remap = None
     all_groups = []
-    for line in input:
+    for line in input_lines:
 
         # let the header through
         if line.startswith(M3U_HEADER):
@@ -166,11 +167,24 @@ def filter_playlist(config, input, output):
                 if remap:
                     base_re = rb'(.*group-title=\")(.*?)(\".*)'
                     rep_re = rb"\1" + remap + rb"\3"
-                    info = re.sub(base_re, rep_re, info)
-                    group = b':'.join([group.split(b':')[0],remap]) + b'\n'
-                output.write(info)
-                output.write(group)
+                    # if we have an EXTINF line, remap the group
+                    if info:
+                        info = re.sub(base_re, rep_re, info)
+                    # if we have an EXTGRP line, remap the group
+                    if group:
+                        group = b':'.join([group.split(b':')[0],remap]) + b'\n'
+
+                # if we found an EXTINF line and it matches the criteria, write it
+                if info:
+                    output.write(info)
+                # if we found an EXTGRP line and it matches the criteria, write it
+                if group:
+                    output.write(group)
+
+                # write the URL
                 output.write(url)
+
+                # reset everything for the next stream
                 info = None
                 group = None
                 url = None
@@ -181,7 +195,7 @@ def filter_playlist(config, input, output):
         if keep and group_name and not group_name in all_groups:
             all_groups.append(group_name)
 
-    logging.info(f'Groups matched (by group or id): {all_groups}')
+    logging.info('Groups matched (by group or id): %s', all_groups)
 
 
 def __main__():
@@ -202,7 +216,7 @@ def __main__():
 
     output_filename = args.output if args.output else cfg['output'] if 'output' in cfg else None
     if not output_filename:
-        logging.error(f'No output in {CONFIG_FILE}')
+        logging.error('No output in %s', CONFIG_FILE)
         sys.exit(1)
 
     pl_filename = get_playlist(cfg)
