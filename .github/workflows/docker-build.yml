@@ -1,0 +1,26 @@
+name: Test Docker Build
+
+on:
+  pull_request:
+    branches:
+      - main
+    paths:
+      - './**'
+      - 'Dockerfile'
+      - '.github/workflows/docker-build.yml'
+      - '.github/workflows/docker-build-reusable.yml'
+
+jobs:
+  test-build:
+    permissions:
+      contents: read
+      packages: write
+    uses: ./.github/workflows/docker-build-reusable.yml
+    with:
+      context: '.'
+      platforms: 'linux/amd64'
+      push: false
+      image-name: 'm3uchop-test'
+      tags-input: 'm3uchop-test:test'
+      use-metadata: false
+      login-required: false
