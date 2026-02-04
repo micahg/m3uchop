@@ -9,6 +9,7 @@ from urllib.parse import urlparse
 import requests
 
 URL_ENV_VAR = 'M3U_URL'
+CONFIG_ENV_VAR = 'M3U_CONFIG'
 CONFIG_FILE = 'config.json'
 LOG_FORMAT = '%(asctime)-15s [%(funcName)s] %(message)s'
 
@@ -19,18 +20,18 @@ M3U_INFO_GROUP_RE = re.compile(b'.*group-title=\"(.*?)\"')
 M3U_INFO_RE = re.compile(b'.*tvg-id=\"(.*?)\".*tvg-name=\"(.*?)\"')
 
 
-def load_config():
+def load_config(config_file):
     """
     Load the configuration file
     """
     try:
-        with open(CONFIG_FILE, 'rb') as file:
+        with open(config_file, 'rb') as file:
             return json.load(file)
     except FileNotFoundError as err:
-        logging.error('Unable to open config file %s: %s', CONFIG_FILE, err)
+        logging.error('Unable to open config file %s: %s', config_file, err)
         sys.exit(1)
     except json.JSONDecodeError:
-        logging.error('Invalid JSON in config file %s', CONFIG_FILE)
+        logging.error('Invalid JSON in config file %s', config_file)
         sys.exit(1)
 
 
@@ -205,6 +206,8 @@ def __main__():
     parser = ArgumentParser()
     parser.add_argument('-d', '--debug', action='store_true', dest='debug',
                         help='debug logging')
+    parser.add_argument('-c', '--config', action='store', dest='config',
+                        help='config file location')
     parser.add_argument('-l', '--logfile', action='store', dest='logfile',
                         help='log file location')
     parser.add_argument('-o', '--output', action='store', dest='output',
@@ -212,11 +215,13 @@ def __main__():
     args = parser.parse_args()
     log_level = logging.DEBUG if args.debug else logging.INFO
     logging.basicConfig(format=LOG_FORMAT, level=log_level, filename=args.logfile if args.logfile else None)
-    cfg = load_config()
+
+    config_file = args.config if args.config else os.environ.get(CONFIG_ENV_VAR, CONFIG_FILE)
+    cfg = load_config(config_file)
 
     output_filename = args.output if args.output else cfg['output'] if 'output' in cfg else None
     if not output_filename:
-        logging.error('No output in %s', CONFIG_FILE)
+        logging.error('No output in %s', config_file)
         sys.exit(1)
 
     pl_filename = get_playlist(cfg)
