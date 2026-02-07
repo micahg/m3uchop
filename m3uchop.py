@@ -1,15 +1,21 @@
 import os
 import re
 import sys
+import time
+import signal
 import logging
 import json
+import asyncio
 from argparse import ArgumentParser
 from urllib.parse import urlparse
+from pathlib import Path
 
 import requests
+from asyncinotify import Inotify, Mask
 
 URL_ENV_VAR = 'M3U_URL'
 CONFIG_ENV_VAR = 'M3U_CONFIG'
+EVERY_ENV_VAR = 'M3U_EVERY'
 CONFIG_FILE = 'config.json'
 LOG_FORMAT = '%(asctime)-15s [%(funcName)s] %(message)s'
 
@@ -29,10 +35,13 @@ def load_config(config_file):
             return json.load(file)
     except FileNotFoundError as err:
         logging.error('Unable to open config file %s: %s', config_file, err)
-        sys.exit(1)
+        return None
     except json.JSONDecodeError:
         logging.error('Invalid JSON in config file %s', config_file)
-        sys.exit(1)
+        return None
+    except Exception as err:
+        logging.error('Unexpected error while loading config file %s: %s', config_file, err)
+        return None
 
 
 def get_playlist(config):
@@ -47,13 +56,13 @@ def get_playlist(config):
 
     if not playlist:
         logging.error('No playlist in %s or config %s', URL_ENV_VAR, CONFIG_FILE)
-        sys.exit(1)
+        raise Exception('No playlist configured')
 
     try:
         pl_url = urlparse(playlist)
     except ValueError:
         logging.error('Unable to parse playlist URL "%s"', playlist)
-        sys.exit(1)
+        raise Exception('Invalid playlist URL')
 
     pl_path = pl_url.path
     if not (pl_url.scheme and pl_url.hostname):
@@ -61,12 +70,16 @@ def get_playlist(config):
         return pl_path
 
     logging.info('Downloading playlist from "%s"', playlist)
-    resp = requests.get(playlist, timeout=10, allow_redirects=True)
+    try:
+        resp = requests.get(playlist, timeout=10, allow_redirects=True)
+    except requests.RequestException as e:
+        raise Exception(f'Download failed: {e}')
+
     logging.info('Download complete')
     if resp.status_code != 200:
         logging.error('Invalid response while downloading URL (%s: %s)',
                       resp.status_code, resp.content)
-        sys.exit(1)
+        raise Exception(f'Invalid response: {resp.status_code}')
 
     output = '/tmp/playlist.m3u'
     with open(output, 'wb') as file:
@@ -199,7 +212,56 @@ def filter_playlist(config, input_lines, output):
     logging.info('Groups matched (by group or id): %s', all_groups)
 
 
-def __main__():
+async def process_playlist(cfg, output_filename):
+    """
+    Run the playlist processing logic
+    """
+    try:
+        # Run blocking I/O in executor to avoid blocking the event loop
+        loop = asyncio.get_running_loop()
+        pl_filename = await loop.run_in_executor(None, get_playlist, cfg)
+        
+        await loop.run_in_executor(None, lambda: filter_playlist_wrapper(cfg, pl_filename, output_filename))
+        logging.info('Playlist processing complete')
+    except Exception as e:
+        logging.error('Error processing playlist: %s', e)
+
+def filter_playlist_wrapper(cfg, pl_filename, output_filename):
+    """Wrapper to handle file opening for filter_playlist in executor"""
+    with open(output_filename, 'wb') as out_file:
+        with open(pl_filename, 'rb') as in_file:
+            filter_playlist(cfg, in_file, out_file)
+
+async def watch_config(config_file, queue):
+    """
+    Watch for changes to the config file and put events in the queue
+    """
+    path = Path(config_file).resolve()
+    # Watch the directory, as editors often replace files atomically (rename/move)
+    # which changes the inode and breaks direct file watches.
+    dir_path = path.parent
+    filename = path.name
+
+    with Inotify() as inotify:
+        inotify.add_watch(dir_path, Mask.CLOSE_WRITE | Mask.MOVED_TO | Mask.CREATE)
+        async for event in inotify:
+            if event.name and str(event.name) == filename:
+                logging.info('Config file %s changed', config_file)
+                await queue.put('config_change')
+
+async def run_scheduler(every, queue):
+    """
+    Put events in the queue based on the timer
+    """
+    if every is None:
+        return
+        
+    while True:
+        logging.info('Sleeping for %d hours', every)
+        await asyncio.sleep(every * 3600)
+        await queue.put('timer')
+
+async def main():
     """
     Run the program
     """
@@ -212,24 +274,106 @@ def __main__():
                         help='log file location')
     parser.add_argument('-o', '--output', action='store', dest='output',
                         help='output file location')
+    parser.add_argument('-e', '--every', action='store', dest='every', type=int,
+                        help='run continuously every N hours')
     args = parser.parse_args()
     log_level = logging.DEBUG if args.debug else logging.INFO
     logging.basicConfig(format=LOG_FORMAT, level=log_level, filename=args.logfile if args.logfile else None)
 
-    config_file = args.config if args.config else os.environ.get(CONFIG_ENV_VAR, CONFIG_FILE)
-    cfg = load_config(config_file)
+    config_source = args.config if args.config else os.environ.get(CONFIG_ENV_VAR, CONFIG_FILE)
+    
+    every = args.every
+    if every is None and EVERY_ENV_VAR in os.environ:
+        try:
+            every = int(os.environ[EVERY_ENV_VAR])
+        except ValueError:
+            logging.error('Invalid value for %s: %s', EVERY_ENV_VAR, os.environ[EVERY_ENV_VAR])
+            sys.exit(1)
 
-    output_filename = args.output if args.output else cfg['output'] if 'output' in cfg else None
-    if not output_filename:
-        logging.error('No output in %s', config_file)
-        sys.exit(1)
+    # Initial load and run
+    cfg = load_config(config_source)
+    output_filename = None
+    if cfg is not None:
+        output_filename = args.output if args.output else cfg['output'] if 'output' in cfg else None
+        if not output_filename:
+            logging.error('No output in %s', config_source)
+            cfg = None
 
-    pl_filename = get_playlist(cfg)
+    if cfg is not None and output_filename is not None:
+        await process_playlist(cfg, output_filename)
 
-    with open(output_filename, 'wb') as out_file:
-        with open(pl_filename, 'rb') as in_file:
-            filter_playlist(cfg, in_file, out_file)
+    if not every and not (os.environ.get('M3U_WATCH_CONFIG')): # Keep running if every is set OR we just want to watch
+        # If no loop is requested and no explicit watch request (optional feature), exit
+        if every is None:
+            return
 
+    queue = asyncio.Queue()
+    loop = asyncio.get_running_loop()
+
+    def request_shutdown(signame):
+        logging.info('Received %s, shutting down', signame)
+        try:
+            queue.put_nowait('shutdown')
+        except asyncio.QueueFull:
+            pass
+    
+    # Start background tasks
+    tasks = []
+    tasks.append(asyncio.create_task(watch_config(config_source, queue)))
+    if every:
+        tasks.append(asyncio.create_task(run_scheduler(every, queue)))
+
+    for signame in ('SIGTERM', 'SIGINT', 'SIGQUIT'):
+        if hasattr(signal, signame):
+            loop.add_signal_handler(getattr(signal, signame), request_shutdown, signame)
+
+    logging.info('Entering event loop. Waiting for %s', 'timer or config change')
+
+    try:
+        while True:
+            reason = await queue.get()
+            logging.info('Triggered by: %s', reason)
+
+            if reason == 'shutdown':
+                break
+            
+            # Reload config if file changed
+            if reason == 'config_change':
+                # Small delay to ensure write is complete
+                await asyncio.sleep(0.1)
+                try:
+                    cfg = load_config(config_source)
+                    # Update output filename if it changed in config
+                    if cfg is None:
+                        logging.error('Config load failed; skipping processing until next trigger')
+                        continue
+                    if not args.output and 'output' in cfg:
+                        output_filename = cfg['output']
+                    if output_filename is None:
+                        logging.error('No output in %s', config_source)
+                        cfg = None
+                        continue
+                except Exception as e:
+                    logging.error("Failed to reload config: %s", e)
+                    continue
+
+            if cfg is None or output_filename is None:
+                logging.info('Skipping processing due to missing config/output')
+                queue.task_done()
+                continue
+
+            await process_playlist(cfg, output_filename)
+            queue.task_done()
+            
+    except asyncio.CancelledError:
+        logging.info("Shutting down")
+    finally:
+        for task in tasks:
+            task.cancel()
+        await asyncio.gather(*tasks, return_exceptions=True)
 
 if __name__ == '__main__':
-    __main__()
+    try:
+        asyncio.run(main())
+    except KeyboardInterrupt:
+        pass

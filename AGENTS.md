@@ -1,0 +1,2 @@
+- Do not update or create documentation unless asked
+- Do not use emojis
