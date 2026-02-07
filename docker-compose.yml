@@ -1,0 +1,19 @@
+version: '3.8'
+
+services:
+  m3uchop:
+    build: .
+    volumes:
+      # Mount a data directory for config and output files
+      - ./data:/data
+    environment:
+      # URL to the m3u playlist
+      - M3U_URL=https://iptv-org.github.io/iptv/index.m3u
+      # Config location inside the mounted data folder
+      - M3U_CONFIG=/data/config.json
+      # Run every N hours (default: run once and exit)
+      # - M3U_EVERY=24
+      # Example of using environment variable for config location if you moved it
+      # - M3U_CONFIG=/app/config.json
+    # Write output to the mounted /data volume
+    command: ["-o", "/data/filtered.m3u"]
