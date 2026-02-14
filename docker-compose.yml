@@ -6,14 +6,14 @@ services:
     volumes:
       # Mount a data directory for config and output files
       - ./data:/data
+      # Mount an output directory for generated playlists
+      - ./output:/output
     environment:
       # URL to the m3u playlist
-      - M3U_URL=https://iptv-org.github.io/iptv/index.m3u
+      - M3U_URL=/data/playlist.m3u
       # Config location inside the mounted data folder
       - M3U_CONFIG=/data/config.json
+      # Output location inside the mounted output folder
+      - M3U_OUTPUT=/output/filtered.m3u
       # Run every N hours (default: run once and exit)
       # - M3U_EVERY=24
-      # Example of using environment variable for config location if you moved it
-      # - M3U_CONFIG=/app/config.json
-    # Write output to the mounted /data volume
-    command: ["-o", "/data/filtered.m3u"]

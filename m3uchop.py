@@ -16,6 +16,7 @@ from asyncinotify import Inotify, Mask
 URL_ENV_VAR = 'M3U_URL'
 CONFIG_ENV_VAR = 'M3U_CONFIG'
 EVERY_ENV_VAR = 'M3U_EVERY'
+OUTPUT_ENV_VAR = 'M3U_OUTPUT'
 CONFIG_FILE = 'config.json'
 LOG_FORMAT = '%(asctime)-15s [%(funcName)s] %(message)s'
 
@@ -292,12 +293,10 @@ async def main():
 
     # Initial load and run
     cfg = load_config(config_source)
-    output_filename = None
-    if cfg is not None:
-        output_filename = args.output if args.output else cfg['output'] if 'output' in cfg else None
-        if not output_filename:
-            logging.error('No output in %s', config_source)
-            cfg = None
+    output_filename = os.environ.get(OUTPUT_ENV_VAR)
+    if not output_filename:
+        logging.error('No output in %s', OUTPUT_ENV_VAR)
+        cfg = None
 
     if cfg is not None and output_filename is not None:
         await process_playlist(cfg, output_filename)
@@ -347,10 +346,8 @@ async def main():
                     if cfg is None:
                         logging.error('Config load failed; skipping processing until next trigger')
                         continue
-                    if not args.output and 'output' in cfg:
-                        output_filename = cfg['output']
                     if output_filename is None:
-                        logging.error('No output in %s', config_source)
+                        logging.error('No output in %s', OUTPUT_ENV_VAR)
                         cfg = None
                         continue
                 except Exception as e:
