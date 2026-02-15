@@ -1,0 +1,21 @@
+{
+  "playlist": "https://example.com/playlist.m3u",
+  "output": "filtered.m3u",
+  "groups": [
+    "List The Group Names You Want To Keep Here",
+    "News",
+    "Sports"
+  ],
+  "names": [
+    {
+      "name": "Channel Name To Match",
+      "group_remap": "Group To Put It In (Optional)"
+    }
+  ],
+  "ids": [
+    {
+      "name": "tvg-id-to-match",
+      "group_remap": "Group To Put It In (Optional)"
+    }
+  ]
+}
