@@ -9,7 +9,7 @@ services:
       # Mount an output directory for generated playlists
       - ./output:/output
     environment:
-      # URL to the m3u playlist
+      # URL to the m3u playlist (can be a local file path or a remote URL)
       - M3U_URL=/data/playlist.m3u
       # Config location inside the mounted data folder
       - M3U_CONFIG=/data/config.json
