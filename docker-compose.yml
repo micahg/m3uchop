@@ -2,7 +2,8 @@ version: '3.8'
 
 services:
   m3uchop:
-    build: .
+    container_name: m3uchop
+    image: mfg81/m3uchop:latest
     volumes:
       # Mount a data directory for config and output files
       - ./data:/data
